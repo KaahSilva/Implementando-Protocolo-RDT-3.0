@@ -1,82 +1,127 @@
 import socket
+import threading
 import time
 
-class RDT3_0:
-    def __init__(self, sock=None, server_port=None, client_port=None):
-        self.server_port = server_port
-        self.client_port = client_port
-        self.seq_num = 0
-        self.timeout = 1
-        self.max_seq_num = 1000000
-        self.sock = sock  # Recebe o socket criado externamente
+import struct
 
-    # Função para enviar dados
-    def send(self, data, addr):
-        sndpkt = self.make_pkt(self.seq_num, data.decode())
-        self.udt_send(sndpkt, addr)
+TIMEOUT = 1.0  # Timeout de 1 segundo
+ACK = b'ACK'
 
-        start_timer = self.start_timer()
+class RDT_Socket:
+    def __init__(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.settimeout(TIMEOUT)
+        self.lock = threading.Lock()
+        self.expected_seqnum = 0
+        self.next_seqnum = 0
+        self.ack_received = threading.Event()
+        self.state = 'WAIT_CALL_0_FROM_ABOVE'
 
+    def make_pkt(self, seqnum, data):
+        checksum = sum(data) % 256  # Simples checksum
+        return struct.pack('!I', seqnum) + struct.pack('!B', checksum) + data
+
+    def is_corrupt(self, packet):
+        received_checksum = packet[4]
+        data = packet[5:]
+        calculated_checksum = sum(data) % 256
+        return received_checksum != calculated_checksum
+
+    def is_ack(self, packet, seqnum):
+        ack_seqnum = struct.unpack('!I', packet[:4])[0]
+        return ack_seqnum == seqnum
+
+    def rdt_send(self, data, addr):
         while True:
-            if self.check_timeout(start_timer):
-                print("Timeout, reenviando...")
-                self.udt_send(sndpkt, addr)
-                start_timer = self.start_timer()
+            if self.state == 'WAIT_CALL_0_FROM_ABOVE':
+                # a) rdt_send(data)
+                sndpkt = self.make_pkt(0, data)
+                self.sock.sendto(sndpkt, addr)
+                self.start_timer()
+                self.state = 'WAIT_ACK_0'
+
+            elif self.state == 'WAIT_ACK_0':
+                try:
+                    rcvpkt, _ = self.sock.recvfrom(1024)
+                    # b) rdt_rcv(rcvpkt) && (corrupt(rcvpkt) || isACK(rcvpkt,1))
+                    if self.is_corrupt(rcvpkt) or self.is_ack(rcvpkt, 1):
+                        continue
+                    # d) rdt_rcv(rcvpkt) && notcorrupt(rcvpkt) && isACK(rcvpkt,0)
+                    if not self.is_corrupt(rcvpkt) and self.is_ack(rcvpkt, 0):
+                        self.stop_timer()
+                        self.state = 'WAIT_CALL_1_FROM_ABOVE'
+                        break
+                except socket.timeout:
+                    # c) timeout
+                    self.sock.sendto(sndpkt, addr)
+                    self.start_timer()
+
+            elif self.state == 'WAIT_CALL_1_FROM_ABOVE':
+                # f) rdt_send(data)
+                sndpkt = self.make_pkt(1, data)
+                self.sock.sendto(sndpkt, addr)
+                self.start_timer()
+                self.state = 'WAIT_ACK_1'
+
+            elif self.state == 'WAIT_ACK_1':
+                try:
+                    rcvpkt, _ = self.sock.recvfrom(1024)
+                    # g) rdt_rcv(rcvpkt) && (corrupt(rcvpkt) || isACK(rcvpkt,0))
+                    if self.is_corrupt(rcvpkt) or self.is_ack(rcvpkt, 0):
+                        continue
+                    # i) rdt_rcv(rcvpkt) && notcorrupt(rcvpkt) && isACK(rcvpkt,1)
+                    if not self.is_corrupt(rcvpkt) and self.is_ack(rcvpkt, 1):
+                        self.stop_timer()
+                        self.state = 'WAIT_CALL_0_FROM_ABOVE'
+                        break
+                except socket.timeout:
+                    # g) timeout
+                    self.sock.sendto(sndpkt, addr)
+                    self.start_timer()
+
+    def rdt_recv(self, bufsize):
+        while True:
+            try:
+                packet, addr = self.sock.recvfrom(bufsize)
+                # e) rdt_rcv(rcvpkt)
+                if self.is_corrupt(packet):
+                    continue
+                seqnum = struct.unpack('!I', packet[:4])[0]
+                if seqnum == self.expected_seqnum:
+                    self.expected_seqnum = 1 - self.expected_seqnum
+                    ack_pkt = self.make_pkt(seqnum, ACK)
+                    self.sock.sendto(ack_pkt, addr)
+                    return packet[5:], addr
+            except socket.timeout:
                 continue
 
-            try:
-                rcvpkt = self.udt_recv()
-                if self.isACK(rcvpkt, self.seq_num):
-                    self.stop_timer(start_timer)
-                    break
-            except Exception as e:
-                print(f"Erro durante o recebimento do ACK: {e}")
-
-    # Função para receber dados
-    def receive(self, addr):
-        rcvpkt = self.udt_recv()
-        print(f"Dados recebidos: {rcvpkt.decode()}")
-        
-        try:
-            seq_num, data = rcvpkt.decode().split("|", 1)
-            seq_num = int(seq_num)
-            
-            # Envia ACK para o pacote recebido
-            self.udt_send(self.make_ack(seq_num), addr)
-        except Exception as e:
-            print(f"Erro durante o processamento dos dados recebidos: {e}")
-
-    # Função para criar um pacote
-    def make_pkt(self, seq_num, data):
-        return (str(seq_num) + "|" + data).encode()
-
-    # Função para criar um ACK
-    def make_ack(self, seq_num):
-        return (str(seq_num) + "|ACK").encode()
-
-    # Função para enviar dados pela UDP
-    def udt_send(self, sndpkt, addr):
-        self.sock.sendto(sndpkt, addr)
-
-    # Função para receber dados pela UDP
-    def udt_recv(self):
-        data, addr = self.sock.recvfrom(1024)
-        return data
-
-    # Função para iniciar o temporizador
     def start_timer(self):
-        return time.time()
+        self.timer = threading.Timer(TIMEOUT, self.handle_timeout)
+        self.timer.start()
 
-    # Função para parar o temporizador
-    def stop_timer(self, start_timer):
-        pass  # Se não precisar fazer nada, pode deixar assim
+    def stop_timer(self):
+        self.timer.cancel()
 
-    # Função para verificar o tempo limite
-    def check_timeout(self, start_timer):
-        return (time.time() - start_timer) > self.timeout
+    def handle_timeout(self):
+        self.ack_received.clear()
 
-    # Função para verificar se o ACK é válido
-    def isACK(self, rcvpkt, seq_num):
-        decoded_pkt = rcvpkt.decode()
-        parts = decoded_pkt.split("|")
-        return len(parts) == 2 and parts[0] == str(seq_num) and parts[1] == "ACK"
+def rdt_socket():
+    return RDT_Socket()
+
+def rdt_bind(sock, port):
+    sock.sock.bind(('', port))
+
+def rdt_peer(sock, address, port):
+    sock.sock.connect((address, port))
+
+def rdt_send(sock, data, addr=None):
+    sock.rdt_send(data, addr)
+
+def rdt_recv(sock, bufsize):
+    return sock.rdt_recv(bufsize)
+
+def rdt_close(sock):
+    sock.sock.close()
+
+def rdt_network_init(loss_prob, corrupt_prob):
+    pass  # Implementação fictícia para simular a inicialização da rede
