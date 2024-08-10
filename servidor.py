@@ -1,83 +1,50 @@
-# from rdt3 import rdt_socket, rdt_bind, rdt_recv, rdt_send, rdt_close, rdt_network_init
 
-# def verifica_numero(num):
-#     if num > 0:
-#         return "O número é positivo."
-#     elif num < 0:
-#         return "O número é negativo."
-#     else:
-#         return "O número é zero."
+import socket
+import threading
+from rdt3 import RDT3_0
 
-# def servidor():
-#     rdt_network_init(0.0, 0.0)  # Inicializa a rede com taxas de perda e erro de 0
-#     sock = rdt_socket()
-#     rdt_bind(sock, 200)  # Porta do servidor
+class Server:
+    def __init__(self, server_port):
+        self.server_port = server_port
 
-#     while True:
-#         try:
-#             data, addr = rdt_recv(sock, 1024)
-#             if not data:
-#                 break
-#             numero = float(data.decode())
-#             resultado = verifica_numero(numero)
-#             rdt_send(sock, resultado.encode(), addr)
-#         except Exception as e:
-#             print("Erro no servidor:", e)
-#             break
-    
-#     rdt_close(sock)
+        # Cria um socket UDP
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("", self.server_port))
 
-# if __name__ == "__main__":
-#     servidor()
+        # Cria uma instância de RDT3.0, passando o socket
+        self.rdt = RDT3_0(sock=self.sock)
 
+    def start(self):
+        while True:
+            try:
+                # Recebe o dado do cliente
+                rcvpkt, addr = self.sock.recvfrom(1024)  # Recebe o pacote e o endereço
+                print(f"Dados recebidos do cliente: {rcvpkt.decode()}")
+                
+                # Processa o pacote recebido do cliente
+                self.rdt.receive(addr)  # Processa o ACK primeiro
+                
+                # Extraí o número e os dados
+                seq_num, received_data = rcvpkt.decode().split("|", 1)
+                seq_num = int(seq_num)
+                
+                # Processa o número
+                number = int(received_data)
+                if number > 0:
+                    response = "O número é positivo"
+                else:
+                    response = "O número é negativo"
+                
+                print(f"Enviando resposta: {response}")
+                self.rdt.send(response.encode(), addr)
+            except Exception as e:
+                print(f"Erro ocorreu: {e}")
 
-# #-----------------------------------------
-# import socket
+        self.sock.close()
 
-# SERVER_ADDRESS = ("127.0.0.1", 12000)
-
-# server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-# server_socket.bind(SERVER_ADDRESS)
-
-# print("Servidor pronto para receber mensagens...")
-
-# while True:
-#     message, client_address = server_socket.recvfrom(2048)
-#     print(f"Mensagem recebida de {client_address}: {message.decode()}")
-#     modified_message = message.decode().upper()
-#     server_socket.sendto(modified_message.encode(), client_address)
-
-
-#--------------------aaaaaaa-----------------------------------------------------------
-
-from rdt3 import rdt_socket, rdt_bind, rdt_recv, rdt_send, rdt_close, rdt_network_init
-
-def verifica_numero(num):
-    if num > 0:
-        return "O número é positivo."
-    elif num < 0:
-        return "O número é negativo."
-    else:
-        return "O número é zero."
-
-def servidor():
-    rdt_network_init(0.0, 0.0)  # Inicializa a rede com taxas de perda e erro de 0
-    sock = rdt_socket()
-    rdt_bind(sock, 12000)  # Porta do servidor
-
-    while True:
-        try:
-            data, addr = rdt_recv(sock, 2024)
-            if not data:
-                break
-            numero = float(data.decode())
-            resultado = verifica_numero(numero)
-            rdt_send(sock, resultado.encode(), addr)
-        except Exception as e:
-            print("Erro no servidor:", e)
-            break
-    
-    rdt_close(sock)
-
+# Executa o servidor
 if __name__ == "__main__":
-    servidor()
+    server_port = 12345
+    server = Server(server_port)
+    server_thread = threading.Thread(target=server.start)
+    server_thread.start()
