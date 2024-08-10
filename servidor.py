@@ -1,83 +1,36 @@
-# from rdt3 import rdt_socket, rdt_bind, rdt_recv, rdt_send, rdt_close, rdt_network_init
+import socket
+from rdt3 import RDT3_0
 
-# def verifica_numero(num):
-#     if num > 0:
-#         return "O número é positivo."
-#     elif num < 0:
-#         return "O número é negativo."
-#     else:
-#         return "O número é zero."
+class Client:
+    def __init__(self, server_port, client_port):
+        self.server_port = server_port
+        self.client_port = client_port
 
-# def servidor():
-#     rdt_network_init(0.0, 0.0)  # Inicializa a rede com taxas de perda e erro de 0
-#     sock = rdt_socket()
-#     rdt_bind(sock, 200)  # Porta do servidor
+        # Cria um socket UDP
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind(("", self.client_port))
 
-#     while True:
-#         try:
-#             data, addr = rdt_recv(sock, 1024)
-#             if not data:
-#                 break
-#             numero = float(data.decode())
-#             resultado = verifica_numero(numero)
-#             rdt_send(sock, resultado.encode(), addr)
-#         except Exception as e:
-#             print("Erro no servidor:", e)
-#             break
-    
-#     rdt_close(sock)
+        # Cria uma instância de RDT3.0, passando o socket
+        self.rdt = RDT3_0(sock=self.sock)
 
-# if __name__ == "__main__":
-#     servidor()
+    def start(self, server_addr):
+        while True:
+            try:
+                number = int(input("Digite um número: "))
+                print(f"Enviando número: {number}")
+                self.rdt.send(str(number).encode(), server_addr)
+                data, _ = self.sock.recvfrom(1024)
+                print(f"Recebido do servidor: {data.decode()}")
+            except Exception as e:
+                print(f"Erro ocorreu: {e}")
 
+        self.sock.close()
 
-# #-----------------------------------------
-# import socket
-
-# SERVER_ADDRESS = ("127.0.0.1", 12000)
-
-# server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-# server_socket.bind(SERVER_ADDRESS)
-
-# print("Servidor pronto para receber mensagens...")
-
-# while True:
-#     message, client_address = server_socket.recvfrom(2048)
-#     print(f"Mensagem recebida de {client_address}: {message.decode()}")
-#     modified_message = message.decode().upper()
-#     server_socket.sendto(modified_message.encode(), client_address)
-
-
-#--------------------aaaaaaa-----------------------------------------------------------
-
-from rdt3 import rdt_socket, rdt_bind, rdt_recv, rdt_send, rdt_close, rdt_network_init
-
-def verifica_numero(num):
-    if num > 0:
-        return "O número é positivo."
-    elif num < 0:
-        return "O número é negativo."
-    else:
-        return "O número é zero."
-
-def servidor():
-    rdt_network_init(0.0, 0.0)  # Inicializa a rede com taxas de perda e erro de 0
-    sock = rdt_socket()
-    rdt_bind(sock, 12000)  # Porta do servidor
-
-    while True:
-        try:
-            data, addr = rdt_recv(sock, 2024)
-            if not data:
-                break
-            numero = float(data.decode())
-            resultado = verifica_numero(numero)
-            rdt_send(sock, resultado.encode(), addr)
-        except Exception as e:
-            print("Erro no servidor:", e)
-            break
-    
-    rdt_close(sock)
-
+# Executa o cliente
 if __name__ == "__main__":
-    servidor()
+    server_port = 12345
+    client_port = 54321
+    server_addr = ("localhost", server_port)
+
+    client = Client(server_port, client_port)
+    client.start(server_addr)
