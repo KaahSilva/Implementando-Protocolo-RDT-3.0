@@ -1,5 +1,5 @@
 import socket
-from rdt import RDT3_0
+from rdt3 import RDT3_0
 
 # Configuração do socket do cliente
 client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
