@@ -1,37 +1,38 @@
-
 import socket
-from rdt3 import RDT3_0
+from rdt import RDT3_0
 
-class Client:
-    def __init__(self, server_port, client_port):
-        self.server_port = server_port
-        self.client_port = client_port
+# Configuração do socket do cliente
+client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+server_address = ('localhost', 8080)
+rdt = RDT3_0(sock=client_socket)
 
-        # Cria um socket UDP
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.sock.bind(("", self.client_port))
+try:
+    # Solicita um número ao usuário
+    message = input("Digite um número: ")
 
-        # Cria uma instância de RDT3.0, passando o socket
-        self.rdt = RDT3_0(sock=self.sock)
+    # Envia o número para o servidor
+    request_pkt = rdt.make_pkt(rdt.seq_num, message)
+    rdt.udt_send(request_pkt, server_address)
+    
+    # Espera pela resposta do servidor
+    while True:
+        seq_num, data, server = rdt.receive()
+        if data is None:
+            continue
 
-    def start(self, server_addr):
-        while True:
-            try:
-                number = int(input("Digite um número: "))
-                print(f"Enviando número: {number}")
-                self.rdt.send(str(number).encode(), server_addr)
-                data, _ = self.sock.recvfrom(1024)
-                print(f"Recebido do servidor: {data.decode()}")
-            except Exception as e:
-                print(f"Erro ocorreu: {e}")
+        print(f"Resposta do servidor: {data}")
 
-        self.sock.close()
+        # Envia o ACK para o servidor
+        rdt.send_ack(seq_num, server)
 
-# Executa o cliente
-if __name__ == "__main__":
-    server_port = 12345
-    client_port = 54321
-    server_addr = ("localhost", server_port)
+        # Confere se o pacote é o esperado
+        if seq_num == rdt.expected_seq_num:
+            rdt.expected_seq_num = 1 - rdt.expected_seq_num  # Alterna o número de sequência esperado
+            break
 
-    client = Client(server_port, client_port)
-    client.start(server_addr)
+except Exception as e:
+    print(f"Erro: {e}")
+    
+finally:
+    # Fecha o socket do cliente
+    client_socket.close()

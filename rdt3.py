@@ -1,82 +1,47 @@
 import socket
-import time
+import zlib
 
 class RDT3_0:
-    def __init__(self, sock=None, server_port=None, client_port=None):
-        self.server_port = server_port
-        self.client_port = client_port
+    def __init__(self, sock, timeout=1):
+        self.sock = sock
+        self.timeout = timeout
         self.seq_num = 0
-        self.timeout = 1
-        self.max_seq_num = 1000000
-        self.sock = sock  # Recebe o socket criado externamente
+        self.expected_seq_num = 0
 
-    # Função para enviar dados
-    def send(self, data, addr):
-        sndpkt = self.make_pkt(self.seq_num, data.decode())
-        self.udt_send(sndpkt, addr)
+    def calculate_checksum(self, data):
+        return zlib.crc32(data.encode('utf-8'))
 
-        start_timer = self.start_timer()
-
-        while True:
-            if self.check_timeout(start_timer):
-                print("Timeout, reenviando...")
-                self.udt_send(sndpkt, addr)
-                start_timer = self.start_timer()
-                continue
-
-            try:
-                rcvpkt = self.udt_recv()
-                if self.isACK(rcvpkt, self.seq_num):
-                    self.stop_timer(start_timer)
-                    break
-            except Exception as e:
-                print(f"Erro durante o recebimento do ACK: {e}")
-
-    # Função para receber dados
-    def receive(self, addr):
-        rcvpkt = self.udt_recv()
-        print(f"Dados recebidos: {rcvpkt.decode()}")
-        
-        try:
-            seq_num, data = rcvpkt.decode().split("|", 1)
-            seq_num = int(seq_num)
-            
-            # Envia ACK para o pacote recebido
-            self.udt_send(self.make_ack(seq_num), addr)
-        except Exception as e:
-            print(f"Erro durante o processamento dos dados recebidos: {e}")
-
-    # Função para criar um pacote
     def make_pkt(self, seq_num, data):
-        return (str(seq_num) + "|" + data).encode()
+        checksum = self.calculate_checksum(data)
+        return f"{seq_num}|{checksum}|{data}".encode('utf-8')
 
-    # Função para criar um ACK
-    def make_ack(self, seq_num):
-        return (str(seq_num) + "|ACK").encode()
+    def udt_send(self, pkt, addr):
+        self.sock.sendto(pkt, addr)
 
-    # Função para enviar dados pela UDP
-    def udt_send(self, sndpkt, addr):
-        self.sock.sendto(sndpkt, addr)
+    def receive(self):
+        self.sock.settimeout(self.timeout)
+        try:
+            data, addr = self.sock.recvfrom(1024)
+            data_str = data.decode('utf-8')
+            seq_num_str, checksum_str, payload = data_str.split('|', 2)
+            seq_num = int(seq_num_str)
+            checksum = int(checksum_str)
 
-    # Função para receber dados pela UDP
-    def udt_recv(self):
-        data, addr = self.sock.recvfrom(1024)
-        return data
+            # Verifica o checksum
+            if checksum == self.calculate_checksum(payload):
+                return seq_num, payload, addr
+            else:
+                print("Checksum inválido. Pacote corrompido.")
+                return None, None, None
+        except socket.timeout:
+            return None, None, None
 
-    # Função para iniciar o temporizador
-    def start_timer(self):
-        return time.time()
+    def send_ack(self, seq_num, addr):
+        ack_pkt = self.make_pkt(seq_num, "ACK")
+        self.udt_send(ack_pkt, addr)
 
-    # Função para parar o temporizador
-    def stop_timer(self, start_timer):
-        pass  # Se não precisar fazer nada, pode deixar assim
-
-    # Função para verificar o tempo limite
-    def check_timeout(self, start_timer):
-        return (time.time() - start_timer) > self.timeout
-
-    # Função para verificar se o ACK é válido
-    def isACK(self, rcvpkt, seq_num):
-        decoded_pkt = rcvpkt.decode()
-        parts = decoded_pkt.split("|")
-        return len(parts) == 2 and parts[0] == str(seq_num) and parts[1] == "ACK"
+    def wait_for_ack(self):
+        seq_num, payload, addr = self.receive()
+        if seq_num == self.seq_num and payload == "ACK":
+            return True
+        return False
